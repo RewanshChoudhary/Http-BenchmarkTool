@@ -15,6 +15,11 @@ var requests int
 
 var workers int
 var method string
+type SafeMap struct {
+	mu sync.Mutex
+	m  map[int]int
+}
+
 
 // benchmarkCmd represents the benchmark command
 var benchmarkCmd = &cobra.Command{
@@ -39,7 +44,7 @@ type response struct {
 	success bool
 }
 
-func worker(url string, jobs chan int, workers int, method string, results chan<- response, wg *sync.WaitGroup) {
+func worker(countStatusCode *SafeMap,url string, jobs chan int, workers int, method string, results chan<- response, wg *sync.WaitGroup) {
 	client := http.Client{}
 
 	defer wg.Done()
@@ -62,16 +67,27 @@ func worker(url string, jobs chan int, workers int, method string, results chan<
 			results <- response{elapsed, false}
 
 		}
+		if err == nil {
+			countStatusCode.mu.Lock()
+			countStatusCode.m[resp.StatusCode]++
+			countStatusCode.mu.Unlock()
+			defer resp.Body.Close()
+		}
+
+
 		success := resp.StatusCode >= 200 && resp.StatusCode < 300
 
 		results <- response{elapsed, success}
 
 	}
 
+
 }
 
 func runBenchmarkTool(url string, requests int, workers int, method string) {
 	var wg sync.WaitGroup
+	counter := &SafeMap{m: make(map[int]int)}
+
 	delayPerRequest:=[]time.Duration{}
 
 	jobs := make(chan int, requests)
@@ -82,7 +98,7 @@ func runBenchmarkTool(url string, requests int, workers int, method string) {
 
 		wg.Add(1)
 
-		go worker(url, jobs, workers, method, results, &wg)
+		go worker(counter,url, jobs, workers, method, results, &wg)
 
 	}
 
@@ -100,6 +116,7 @@ func runBenchmarkTool(url string, requests int, workers int, method string) {
 	var totalDelay time.Duration
 	var success ,failed int
 	var median time.Duration
+	
 
 
 
@@ -150,6 +167,9 @@ func runBenchmarkTool(url string, requests int, workers int, method string) {
 	fmt.Printf("Max Latency:    %v\n", max)
 	fmt.Println(delayPerRequest)
 	fmt.Printf("The median the value of latency is : %v\n",median)
+
+	fmt.Println("The count of each status code is as follows ",counter.m)
+
 
 
 
