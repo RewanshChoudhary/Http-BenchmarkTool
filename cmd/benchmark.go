@@ -1,11 +1,9 @@
-/*
-Copyright © 2025 NAME HERE <EMAIL ADDRESS>
-*/
 package cmd
 
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -21,13 +19,8 @@ var method string
 // benchmarkCmd represents the benchmark command
 var benchmarkCmd = &cobra.Command{
 	Use:   "benchmark",
-	Short: "Provides core flags to test",
-	Long: `A longer description that spans multiple lines and likely contains examples
-and usage of using your command. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
+	Short: "Provides core flags to test your http endpoints ",
+	Long: "Helps in examining and checking performance of endpoints ",
 	Run: func(cmd *cobra.Command, args []string) {
 		if url == "" {
 			fmt.Println("A url is expected")
@@ -79,6 +72,7 @@ func worker(url string, jobs chan int, workers int, method string, results chan<
 
 func runBenchmarkTool(url string, requests int, workers int, method string) {
 	var wg sync.WaitGroup
+	delayPerRequest:=[]time.Duration{}
 
 	jobs := make(chan int, requests)
 
@@ -105,9 +99,13 @@ func runBenchmarkTool(url string, requests int, workers int, method string) {
 	var min ,max time.Duration
 	var totalDelay time.Duration
 	var success ,failed int
+	var median time.Duration
+
 
 
 	for res:=range results{
+		delayPerRequest=append(delayPerRequest, (res.delay))
+
 		if (res.success){
 			success++
 		}else {
@@ -125,6 +123,22 @@ func runBenchmarkTool(url string, requests int, workers int, method string) {
 		}
 
 	}
+	sort.Slice(delayPerRequest,func(i,j int )bool{
+		return delayPerRequest[i]<delayPerRequest[j]
+		
+
+
+	})
+	l:=len(delayPerRequest)
+
+	if(l%2==0){
+		median=(delayPerRequest[l/2]+delayPerRequest[(l/2)-1])/2
+
+
+	}else {
+		median=(delayPerRequest[l/2])
+
+	}
 	avgTimeTaken:=totalDelay/time.Duration(requests)
 
 	fmt.Println("\n--- Benchmark Summary ---")
@@ -134,7 +148,11 @@ func runBenchmarkTool(url string, requests int, workers int, method string) {
 	fmt.Printf("Avg Latency:    %v\n", avgTimeTaken)
 	fmt.Printf("Min Latency:    %v\n", min)
 	fmt.Printf("Max Latency:    %v\n", max)
-	
+	fmt.Println(delayPerRequest)
+	fmt.Printf("The median the value of latency is : %v\n",median)
+
+
+
 	
 
 }
