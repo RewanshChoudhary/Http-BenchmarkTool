@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"sort"
@@ -14,18 +16,36 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var timeout int
-var url string
-var requests int
+var (
+	timeout  int
+	url      string
+	requests int
 
-var workers int
-var method string
-var headers []string
-var body string
+	workers    int
+	method     string
+	headers    []string
+	body       string
+	prettyCsv  bool
+	prettyJson bool
+)
 
+type PerfSummary struct {
+	TotalRequests             int
+	ConcurrentWorkersAssigned int
+	TotalDelay                time.Duration
+	Median                    time.Duration
+	AverageTimeTaken          time.Duration
+	SuccessCount              int
+	FailedCount               int
+	MinLatency                time.Duration
+	MaxLatency                time.Duration
+	DelayPerRequest           []time.Duration
+}
 type SafeMap struct {
 	mu sync.Mutex
 	m  map[int]int
+	// helps preventing deadlock between GoRountines
+	// which trys to update and access at the same time
 }
 
 // benchmarkCmd represents the benchmark command
@@ -195,6 +215,21 @@ func properties(results chan response, success, failed *int, totalDelay, min, ma
 	return delayPerRequest
 }
 
+func exportJsonFile(jsonStruct *PerfSummary) {
+	jsonData, err := json.MarshalIndent(jsonStruct, "", " ")
+	if err != nil {
+		log.Fatalf("Uncountered an error while identing the file %v", err)
+	}
+	er := os.WriteFile("summary.json", jsonData, 0644)
+	if er != nil {
+		log.Fatalf("Uncountered an error while making a file %v", er)
+
+	}
+
+	fmt.Println("Json file was written: ")
+
+}
+
 func runBenchmarkTool(url string, requests int, workers int, method string) {
 	var wg sync.WaitGroup
 	counter := &SafeMap{m: make(map[int]int)}
@@ -235,20 +270,34 @@ func runBenchmarkTool(url string, requests int, workers int, method string) {
 
 	}
 	avgTimeTaken := totalDelay / time.Duration(requests)
+	if prettyJson {
+		results := PerfSummary{requests,
+			workers,
+			totalDelay,
+			median,
+			avgTimeTaken,
+			success,
+			failed,
+			min,
+			max,
+			delayPerRequest,
+		}
+		exportJsonFile(&results)
+	}
+	if prettyJson == false {
+		fmt.Println("\n--- Benchmark Summary ---")
+		fmt.Printf("Total Requests: %d\n", requests)
+		fmt.Printf("Successful: Attempts      %d\n", success)
+		fmt.Printf("Failed: Attempts        %d\n", failed)
+		fmt.Printf("Avg Latency:    %v\n", avgTimeTaken)
+		fmt.Printf("Min Latency:    %v\n", min)
+		fmt.Printf("Max Latency:    %v\n", max)
+		fmt.Println(delayPerRequest)
+		fmt.Printf("The median the value of latency is : %v\n", median)
 
-	fmt.Println("\n--- Benchmark Summary ---")
-	fmt.Printf("Total Requests: %d\n", requests)
-	fmt.Printf("Successful: Attempts      %d\n", success)
-	fmt.Printf("Failed: Attempts        %d\n", failed)
-	fmt.Printf("Avg Latency:    %v\n", avgTimeTaken)
-	fmt.Printf("Min Latency:    %v\n", min)
-	fmt.Printf("Max Latency:    %v\n", max)
-	fmt.Println(delayPerRequest)
-	fmt.Printf("The median the value of latency is : %v\n", median)
-
-	fmt.Println("The count of each status code is as follows ")
-	printStatusCodeCount(counter.m)
-
+		fmt.Println("The count of each status code is as follows ")
+		printStatusCodeCount(counter.m)
+	}
 }
 
 func init() {
@@ -261,5 +310,7 @@ func init() {
 	benchmarkCmd.PersistentFlags().IntVar(&timeout, "timeout", 10000, "The timeout set for each request int miliseconds(ms) ")
 	benchmarkCmd.PersistentFlags().StringArrayVarP(&headers, "header", "H", []string{}, "Custom headers to include in the requests")
 	benchmarkCmd.PersistentFlags().StringVar(&body, "body", "", "The body that is required for the endpoint a json string or @file (e.g. --body='{\"key\":\"value\"}' or --body=@data.json)")
+	benchmarkCmd.PersistentFlags().BoolVar(&prettyJson, "prettyjson", true, "Provides a clean json format summary with each requests time delay ")
+	benchmarkCmd.PersistentFlags().BoolVar(&prettyCsv, "prettycsv", false, "Provides a exported csv file consisting of result's summary")
 
 }
