@@ -4,17 +4,21 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
 )
-
+var timeout int
 var url string
 var requests int
 
 var workers int
 var method string
+var headers []string 
+var body string
+
 type SafeMap struct {
 	mu sync.Mutex
 	m  map[int]int
@@ -43,8 +47,34 @@ type response struct {
 	delay   time.Duration
 	success bool
 }
+func printStatusCodeCount(resultMap map[int ]int){
+	fmt.Println("Status Code :  The Count of it ")
+	for key,value:=range resultMap{
 
-func worker(countStatusCode *SafeMap,url string, jobs chan int, workers int, method string, results chan<- response, wg *sync.WaitGroup) {
+		fmt.Println(key,"-->",value)
+
+
+	}
+}
+func addHeaders( req *http.Request,headers [] string){
+	for _,value:=range headers{
+	      separated :=strings.SplitN(value,":",2)
+		  if (len(separated)!=2){
+			fmt.Printf("Header's are wrong  ")
+			continue
+
+		  }
+		  key:=strings.TrimSpace(separated[0])
+		  value :=strings.TrimSpace(separated[1])
+
+		  req.Header.Add(key,value)
+
+
+
+	}
+}
+
+func worker(timeout int ,countStatusCode *SafeMap,url string, jobs chan int,  method string, results chan<- response, wg *sync.WaitGroup) {
 	client := http.Client{}
 
 	defer wg.Done()
@@ -60,11 +90,15 @@ func worker(countStatusCode *SafeMap,url string, jobs chan int, workers int, met
 			continue
 
 		}
+		addHeaders(req,headers);
+
 		resp, err := client.Do(req)
 		elapsed := time.Since(start)
 
 		if err != nil {
 			results <- response{elapsed, false}
+			continue;
+
 
 		}
 		if err == nil {
@@ -72,6 +106,14 @@ func worker(countStatusCode *SafeMap,url string, jobs chan int, workers int, met
 			countStatusCode.m[resp.StatusCode]++
 			countStatusCode.mu.Unlock()
 			defer resp.Body.Close()
+		}
+
+		if (int(elapsed.Milliseconds())>=timeout){
+			results <- response{elapsed, false}
+			continue;
+
+
+
 		}
 
 
@@ -83,6 +125,49 @@ func worker(countStatusCode *SafeMap,url string, jobs chan int, workers int, met
 
 
 }
+func startWorkers(workers int , jobs chan int , results chan <-response , url , method string, statusCounter *SafeMap,wg *sync.WaitGroup){
+
+	for i := 0; i < workers; i++ {
+
+		wg.Add(1)
+
+		go worker(timeout,statusCounter,url, jobs,  method, results, wg)
+
+	}
+
+}
+func sortSlice(delayPerRequest []time.Duration){
+	sort.Slice(delayPerRequest,func(i,j int )bool{
+		return delayPerRequest[i]<delayPerRequest[j]
+		
+
+
+	})
+}
+func properties(results chan  response ,success ,failed *int ,totalDelay,min,max *time.Duration)[]time.Duration{
+  var delayPerRequest []time.Duration
+	for res:=range results{
+		delayPerRequest=append(delayPerRequest, (res.delay))
+
+		if (res.success){
+			*success++
+		}else {
+			*failed++
+
+		}
+		*totalDelay+=res.delay
+
+		if(res.delay<*min){
+			*min=res.delay
+
+		}
+		if (res.delay>*max){
+			*max=res.delay
+		}
+
+	}
+	return delayPerRequest
+}
 
 func runBenchmarkTool(url string, requests int, workers int, method string) {
 	var wg sync.WaitGroup
@@ -93,14 +178,7 @@ func runBenchmarkTool(url string, requests int, workers int, method string) {
 	jobs := make(chan int, requests)
 
 	results := make(chan response, requests)
-
-	for i := 0; i < workers; i++ {
-
-		wg.Add(1)
-
-		go worker(counter,url, jobs, workers, method, results, &wg)
-
-	}
+   startWorkers(workers,jobs,results,url,method,counter,&wg)
 
 	for i := 0; i < requests; i++ {
 		jobs <- i
@@ -116,36 +194,12 @@ func runBenchmarkTool(url string, requests int, workers int, method string) {
 	var totalDelay time.Duration
 	var success ,failed int
 	var median time.Duration
+
+	delayPerRequest=properties(results,&success,&failed,&totalDelay,&min,&max)
+    
 	
+	sortSlice(delayPerRequest)
 
-
-
-	for res:=range results{
-		delayPerRequest=append(delayPerRequest, (res.delay))
-
-		if (res.success){
-			success++
-		}else {
-			failed++
-
-		}
-		totalDelay+=res.delay
-
-		if(res.delay<min){
-			min=res.delay
-
-		}
-		if (res.delay>max){
-			max=res.delay
-		}
-
-	}
-	sort.Slice(delayPerRequest,func(i,j int )bool{
-		return delayPerRequest[i]<delayPerRequest[j]
-		
-
-
-	})
 	l:=len(delayPerRequest)
 
 	if(l%2==0){
@@ -168,7 +222,9 @@ func runBenchmarkTool(url string, requests int, workers int, method string) {
 	fmt.Println(delayPerRequest)
 	fmt.Printf("The median the value of latency is : %v\n",median)
 
-	fmt.Println("The count of each status code is as follows ",counter.m)
+	fmt.Println("The count of each status code is as follows ")
+	printStatusCodeCount(counter.m);
+
 
 
 
@@ -184,5 +240,8 @@ func init() {
 	benchmarkCmd.PersistentFlags().IntVar(&workers, "concurrency", 1, "The number of concurrrent workers you want to assign Default: Assigns 1 worker only")
 
 	benchmarkCmd.PersistentFlags().StringVar(&method, "method", "", "The type of HTTP request is it For ex : Get , Post etc")
+    benchmarkCmd.PersistentFlags().IntVar(&timeout,"timeout",10000,"The timeout set for each request int miliseconds(ms) ")
+    benchmarkCmd.PersistentFlags().StringArrayVarP(&headers,"header","H",[]string {},"Custom headers to include in the requests")
+    benchmarkCmd.PersistentFlags().StringVar(&body,"body","","The body that is required for the endpoint a json string or @file (e.g. --body='{\"key\":\"value\"}' or --body=@data.json)")
 
 }
