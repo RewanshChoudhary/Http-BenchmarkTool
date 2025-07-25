@@ -1,0 +1,1 @@
+{"name":"Local: benchmark","url":"/home/rewansh57/Programming/Golang/taskman/cmd/benchmark.go","tests":[{"id":1753486088699,"input":"","output":""}],"interactive":false,"memoryLimit":1024,"timeLimit":3000,"srcPath":"/home/rewansh57/Programming/Golang/taskman/cmd/benchmark.go","group":"local","local":true}

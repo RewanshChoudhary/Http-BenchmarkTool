@@ -25,21 +25,24 @@ var (
 	method     string
 	headers    []string
 	body       string
-	prettyCsv  bool
 	prettyJson bool
 )
 
 type PerfSummary struct {
+	Scale                     string
 	TotalRequests             int
 	ConcurrentWorkersAssigned int
-	TotalDelay                time.Duration
-	Median                    time.Duration
-	AverageTimeTaken          time.Duration
-	SuccessCount              int
-	FailedCount               int
-	MinLatency                time.Duration
-	MaxLatency                time.Duration
-	DelayPerRequest           []time.Duration
+	HeadersProvided           []string
+	BodyProvided              string
+
+	TotalDelay       time.Duration
+	Median           time.Duration
+	AverageTimeTaken time.Duration
+	SuccessCount     int
+	FailedCount      int
+	MinLatency       time.Duration
+	MaxLatency       time.Duration
+	DelayPerRequest  []time.Duration
 }
 type SafeMap struct {
 	mu sync.Mutex
@@ -271,8 +274,12 @@ func runBenchmarkTool(url string, requests int, workers int, method string) {
 	}
 	avgTimeTaken := totalDelay / time.Duration(requests)
 	if prettyJson {
-		results := PerfSummary{requests,
+		results := PerfSummary{"NanoSeconds",
+			requests,
 			workers,
+			headers,
+			body,
+
 			totalDelay,
 			median,
 			avgTimeTaken,
@@ -305,12 +312,11 @@ func init() {
 	benchmarkCmd.PersistentFlags().StringVar(&url, "url", "", "The url needed for the operation")
 	benchmarkCmd.PersistentFlags().IntVar(&requests, "requests", 1, "The number of requests for the endpoint you want to make Default: runs one 1 request")
 	benchmarkCmd.PersistentFlags().IntVar(&workers, "concurrency", 1, "The number of concurrrent workers you want to assign Default: Assigns 1 worker only")
-
 	benchmarkCmd.PersistentFlags().StringVar(&method, "method", "", "The type of HTTP request is it For ex : Get , Post etc")
 	benchmarkCmd.PersistentFlags().IntVar(&timeout, "timeout", 10000, "The timeout set for each request int miliseconds(ms) ")
 	benchmarkCmd.PersistentFlags().StringArrayVarP(&headers, "header", "H", []string{}, "Custom headers to include in the requests")
 	benchmarkCmd.PersistentFlags().StringVar(&body, "body", "", "The body that is required for the endpoint a json string or @file (e.g. --body='{\"key\":\"value\"}' or --body=@data.json)")
 	benchmarkCmd.PersistentFlags().BoolVar(&prettyJson, "prettyjson", true, "Provides a clean json format summary with each requests time delay ")
-	benchmarkCmd.PersistentFlags().BoolVar(&prettyCsv, "prettycsv", false, "Provides a exported csv file consisting of result's summary")
+	
 
 }
