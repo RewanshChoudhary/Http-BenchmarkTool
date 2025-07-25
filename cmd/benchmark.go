@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -10,13 +13,14 @@ import (
 
 	"github.com/spf13/cobra"
 )
+
 var timeout int
 var url string
 var requests int
 
 var workers int
 var method string
-var headers []string 
+var headers []string
 var body string
 
 type SafeMap struct {
@@ -24,12 +28,11 @@ type SafeMap struct {
 	m  map[int]int
 }
 
-
 // benchmarkCmd represents the benchmark command
 var benchmarkCmd = &cobra.Command{
 	Use:   "benchmark",
 	Short: "Provides core flags to test your http endpoints ",
-	Long: "Helps in examining and checking performance of endpoints ",
+	Long:  "Helps in examining and checking performance of endpoints ",
 	Run: func(cmd *cobra.Command, args []string) {
 		if url == "" {
 			fmt.Println("A url is expected")
@@ -47,34 +50,67 @@ type response struct {
 	delay   time.Duration
 	success bool
 }
-func printStatusCodeCount(resultMap map[int ]int){
+
+func printStatusCodeCount(resultMap map[int]int) {
 	fmt.Println("Status Code :  The Count of it ")
-	for key,value:=range resultMap{
+	for key, value := range resultMap {
 
-		fmt.Println(key,"-->",value)
-
+		fmt.Println(key, "-->", value)
 
 	}
 }
-func addHeaders( req *http.Request,headers [] string){
-	for _,value:=range headers{
-	      separated :=strings.SplitN(value,":",2)
-		  if (len(separated)!=2){
+func addHeaders(req *http.Request, headers []string) {
+	for _, value := range headers {
+		separated := strings.SplitN(value, ":", 2)
+		if len(separated) != 2 {
 			fmt.Printf("Header's are wrong  ")
 			continue
 
-		  }
-		  key:=strings.TrimSpace(separated[0])
-		  value :=strings.TrimSpace(separated[1])
+		}
+		key := strings.TrimSpace(separated[0])
+		value := strings.TrimSpace(separated[1])
 
-		  req.Header.Add(key,value)
-
-
+		req.Header.Add(key, value)
 
 	}
 }
 
-func worker(timeout int ,countStatusCode *SafeMap,url string, jobs chan int,  method string, results chan<- response, wg *sync.WaitGroup) {
+func startWorkers(workers int, jobs chan int, results chan<- response, url, method string, statusCounter *SafeMap, wg *sync.WaitGroup) {
+
+	for i := 0; i < workers; i++ {
+
+		wg.Add(1)
+
+		go worker(timeout, statusCounter, url, jobs, method, results, wg)
+
+	}
+
+}
+
+// Add application/json header for a json text
+func understandBody(body string) io.Reader {
+	if body == "" {
+		return nil
+	}
+
+	data := strings.TrimLeft(body, " ")
+	if data[0] == '@' {
+		filePath := data[1:]
+		info, err := os.ReadFile(filePath)
+		if err != nil {
+			fmt.Println("Encountered an error while reading the file ")
+			return nil
+		}
+		return bytes.NewReader(info)
+	}
+
+	info := strings.TrimSpace(body)
+
+	return strings.NewReader(info)
+
+}
+
+func worker(timeout int, countStatusCode *SafeMap, url string, jobs chan int, method string, results chan<- response, wg *sync.WaitGroup) {
 	client := http.Client{}
 
 	defer wg.Done()
@@ -82,23 +118,30 @@ func worker(timeout int ,countStatusCode *SafeMap,url string, jobs chan int,  me
 	for range jobs {
 		start := time.Now()
 
-		req, err := http.NewRequest(method, url, nil)
-
+		req, err := http.NewRequest(method, url, understandBody(body))
 		if err != nil {
 			results <- response{0, false}
 
 			continue
 
 		}
-		addHeaders(req,headers);
+
+		if body != "" {
+			req.Header.Add("Content-type", "application/json")
+
+		}
+
+		addHeaders(req, headers)
+
+		understandBody(body)
 
 		resp, err := client.Do(req)
 		elapsed := time.Since(start)
+		defer resp.Body.Close()
 
 		if err != nil {
 			results <- response{elapsed, false}
-			continue;
-
+			continue
 
 		}
 		if err == nil {
@@ -108,14 +151,11 @@ func worker(timeout int ,countStatusCode *SafeMap,url string, jobs chan int,  me
 			defer resp.Body.Close()
 		}
 
-		if (int(elapsed.Milliseconds())>=timeout){
+		if int(elapsed.Milliseconds()) >= timeout {
 			results <- response{elapsed, false}
-			continue;
-
-
+			continue
 
 		}
-
 
 		success := resp.StatusCode >= 200 && resp.StatusCode < 300
 
@@ -123,46 +163,32 @@ func worker(timeout int ,countStatusCode *SafeMap,url string, jobs chan int,  me
 
 	}
 
-
 }
-func startWorkers(workers int , jobs chan int , results chan <-response , url , method string, statusCounter *SafeMap,wg *sync.WaitGroup){
-
-	for i := 0; i < workers; i++ {
-
-		wg.Add(1)
-
-		go worker(timeout,statusCounter,url, jobs,  method, results, wg)
-
-	}
-
-}
-func sortSlice(delayPerRequest []time.Duration){
-	sort.Slice(delayPerRequest,func(i,j int )bool{
-		return delayPerRequest[i]<delayPerRequest[j]
-		
-
+func sortSlice(delayPerRequest []time.Duration) {
+	sort.Slice(delayPerRequest, func(i, j int) bool {
+		return delayPerRequest[i] < delayPerRequest[j]
 
 	})
 }
-func properties(results chan  response ,success ,failed *int ,totalDelay,min,max *time.Duration)[]time.Duration{
-  var delayPerRequest []time.Duration
-	for res:=range results{
-		delayPerRequest=append(delayPerRequest, (res.delay))
+func properties(results chan response, success, failed *int, totalDelay, min, max *time.Duration) []time.Duration {
+	var delayPerRequest []time.Duration
+	for res := range results {
+		delayPerRequest = append(delayPerRequest, (res.delay))
 
-		if (res.success){
+		if res.success {
 			*success++
-		}else {
+		} else {
 			*failed++
 
 		}
-		*totalDelay+=res.delay
+		*totalDelay += res.delay
 
-		if(res.delay<*min){
-			*min=res.delay
+		if res.delay < *min {
+			*min = res.delay
 
 		}
-		if (res.delay>*max){
-			*max=res.delay
+		if res.delay > *max {
+			*max = res.delay
 		}
 
 	}
@@ -173,12 +199,12 @@ func runBenchmarkTool(url string, requests int, workers int, method string) {
 	var wg sync.WaitGroup
 	counter := &SafeMap{m: make(map[int]int)}
 
-	delayPerRequest:=[]time.Duration{}
+	delayPerRequest := []time.Duration{}
 
 	jobs := make(chan int, requests)
 
 	results := make(chan response, requests)
-   startWorkers(workers,jobs,results,url,method,counter,&wg)
+	startWorkers(workers, jobs, results, url, method, counter, &wg)
 
 	for i := 0; i < requests; i++ {
 		jobs <- i
@@ -190,27 +216,25 @@ func runBenchmarkTool(url string, requests int, workers int, method string) {
 
 	close(results)
 
-	var min ,max time.Duration
+	var min, max time.Duration
 	var totalDelay time.Duration
-	var success ,failed int
+	var success, failed int
 	var median time.Duration
 
-	delayPerRequest=properties(results,&success,&failed,&totalDelay,&min,&max)
-    
-	
+	delayPerRequest = properties(results, &success, &failed, &totalDelay, &min, &max)
+
 	sortSlice(delayPerRequest)
 
-	l:=len(delayPerRequest)
+	l := len(delayPerRequest)
 
-	if(l%2==0){
-		median=(delayPerRequest[l/2]+delayPerRequest[(l/2)-1])/2
+	if l%2 == 0 {
+		median = (delayPerRequest[l/2] + delayPerRequest[(l/2)-1]) / 2
 
-
-	}else {
-		median=(delayPerRequest[l/2])
+	} else {
+		median = (delayPerRequest[l/2])
 
 	}
-	avgTimeTaken:=totalDelay/time.Duration(requests)
+	avgTimeTaken := totalDelay / time.Duration(requests)
 
 	fmt.Println("\n--- Benchmark Summary ---")
 	fmt.Printf("Total Requests: %d\n", requests)
@@ -220,16 +244,10 @@ func runBenchmarkTool(url string, requests int, workers int, method string) {
 	fmt.Printf("Min Latency:    %v\n", min)
 	fmt.Printf("Max Latency:    %v\n", max)
 	fmt.Println(delayPerRequest)
-	fmt.Printf("The median the value of latency is : %v\n",median)
+	fmt.Printf("The median the value of latency is : %v\n", median)
 
 	fmt.Println("The count of each status code is as follows ")
-	printStatusCodeCount(counter.m);
-
-
-
-
-
-	
+	printStatusCodeCount(counter.m)
 
 }
 
@@ -240,8 +258,8 @@ func init() {
 	benchmarkCmd.PersistentFlags().IntVar(&workers, "concurrency", 1, "The number of concurrrent workers you want to assign Default: Assigns 1 worker only")
 
 	benchmarkCmd.PersistentFlags().StringVar(&method, "method", "", "The type of HTTP request is it For ex : Get , Post etc")
-    benchmarkCmd.PersistentFlags().IntVar(&timeout,"timeout",10000,"The timeout set for each request int miliseconds(ms) ")
-    benchmarkCmd.PersistentFlags().StringArrayVarP(&headers,"header","H",[]string {},"Custom headers to include in the requests")
-    benchmarkCmd.PersistentFlags().StringVar(&body,"body","","The body that is required for the endpoint a json string or @file (e.g. --body='{\"key\":\"value\"}' or --body=@data.json)")
+	benchmarkCmd.PersistentFlags().IntVar(&timeout, "timeout", 10000, "The timeout set for each request int miliseconds(ms) ")
+	benchmarkCmd.PersistentFlags().StringArrayVarP(&headers, "header", "H", []string{}, "Custom headers to include in the requests")
+	benchmarkCmd.PersistentFlags().StringVar(&body, "body", "", "The body that is required for the endpoint a json string or @file (e.g. --body='{\"key\":\"value\"}' or --body=@data.json)")
 
 }
